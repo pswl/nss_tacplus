@@ -137,9 +137,16 @@ static int8_t _safe_convert_ulong(const char *str, unsigned long *out)
         char errtext[256];
         int errnum = errno;
 
-        strerror_r(errnum, errtext, sizeof(errtext));
-        syslog(LOG_ERR, "%s: strtoul got error: errno=%d, errtext=`%s'",
-               __FILE__, errnum, errtext);
+        if (strerror_r(errnum, errtext, sizeof(errtext)) == 0)
+	{
+            syslog(LOG_ERR, "%s: strtoul got error: errno=%d, errtext=`%s'",
+                   __FILE__, errnum, errtext);
+	}
+	else
+	{
+            syslog(LOG_ERR, "%s: strtoul got error: errno=%d, strerror_r failed with errno=%d",
+                   __FILE__, errnum, errno);
+	}
 
         result = -1;
     }
@@ -192,10 +199,16 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
         char errtext[256];
         int errnum = errno;
 
-        strerror_r(errnum, errtext, sizeof(errtext));
-        syslog(LOG_ERR, "%s: fopen got error: errno=%d, errtext=`%s'",
-               __FILE__, errnum, errtext);
-
+        if (strerror_r(errnum, errtext, sizeof(errtext)) == 0)
+	{
+            syslog(LOG_ERR, "%s: fopen got error: errno=%d, errtext=`%s'",
+                   __FILE__, errnum, errtext);
+        }
+	else
+	{
+            syslog(LOG_ERR, "%s: fopen got error: errno=%d, strerror_r failed with errno=%d",
+                   __FILE__, errnum, errno);
+	}
         errno = errnum;
         return NSS_STATUS_UNAVAIL;
     }
@@ -729,7 +742,7 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                               struct passwd *pw, char *buffer, size_t buflen,
                               int *errnop)
 {
-    struct tac_attrib *attr = NULL;
+    gl_list_node_t attr = NULL;
     enum nss_status status = NSS_STATUS_SUCCESS;
     char *offset = buffer;
     const char *attr_good[REQUIRED_TAC_ATTRS_LEN] = { 0 };
@@ -789,25 +802,26 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
     // password is always notset, so use a constant
     pw->pw_passwd = (char*)NO_PASSWD;
 
-    attr = reply->attr;
+    attr = gl_list_first_node(reply->attr);
     while (NULL != attr && NSS_STATUS_SUCCESS == status)
     {
         char *sep = NULL;
+	const char *val = gl_list_node_value(reply->attr, attr);
 
-        sep = strchr(attr->attr, '=');
+        sep = strchr(val, '=');
         if (NULL == sep)
         {
-            sep = strchr(attr->attr, '*');
+            sep = strchr(val, '*');
         }
         if (NULL != sep)
         {
-            char tmp[attr->attr_len]; // non-portable, but works for GCC
+            char tmp[strlen(val)]; // non-portable, but works for GCC
             char *value = (sep + 1);  // value starts after seperator
-            size_t namsz = sep - attr->attr;
+            size_t namsz = sep - val;
 
             memset(tmp, '\0', sizeof(tmp));
 
-            _normalize_name(attr->attr, namsz, tmp, sizeof(tmp));
+            _normalize_name(val, namsz, tmp, sizeof(tmp));
 
             if (0 == strcmp(tmp, TAC_ATTR_UID))
             {
@@ -940,10 +954,10 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
         {
             syslog(LOG_WARNING,
                    "%s: invalid attribute `%s', no separator",
-                   __FILE__, attr->attr);
+                   __FILE__, val);
         }
 
-        attr = attr->next;
+	attr = gl_list_next_node(reply->attr, attr);
     }
 
     for (size_t o = 0; NULL != REQUIRED_TAC_ATTRS[o]; ++o)
@@ -1083,11 +1097,21 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
             char errtext[256];
             int errnum = errno;
 
-            strerror_r(errnum, errtext, sizeof(errtext));
-            syslog(LOG_WARNING,
-                   "%s: Connection to TACACS+ server failed: server=`%s:%d', "
-                   "errno=%d, errtext=`%s'",
-                   __FILE__, buffer, port, errnum, errtext);
+            if (strerror_r(errnum, errtext, sizeof(errtext)) == 0)
+	    {
+                syslog(LOG_WARNING,
+                       "%s: Connection to TACACS+ server failed: server=`%s:%d', "
+                       "errno=%d, errtext=`%s'",
+                       __FILE__, buffer, port, errnum, errtext);
+            }
+	    else
+	    {
+                syslog(LOG_WARNING,
+                       "%s: Connection to TACACS+ server failed: server=`%s:%d', "
+                       "errno=%d', strerror_r failed with errno=%d",
+                       __FILE__, buffer, port, errnum, errno);
+
+	    }
 
              // upon failure, simply move on to the next server in the list
             continue;
@@ -1095,15 +1119,15 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
         else
         {
             int rv = -1;
-            struct tac_attrib *attr = NULL;
+            gl_list_t attr_list = gl_list_create_empty(GL_ARRAY_LIST, NULL, NULL, NULL, false);
 
-            tac_add_attrib(&attr, "service", G_tacplus_conf.service);
-            tac_add_attrib(&attr, "protocol", G_tacplus_conf.protocol);
+            tac_add_attrib(attr_list, "service", G_tacplus_conf.service);
+            tac_add_attrib(attr_list, "protocol", G_tacplus_conf.protocol);
 
             rv = tac_author_send(tac_fd, name, G_tacplus_conf.protocol,
-                                 "unknown", attr);
+                                 "unknown", attr_list);
 
-            tac_free_attrib(&attr);
+            tac_free_attrib(attr_list);
 
             if (0 > rv)
             {
@@ -1114,6 +1138,7 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
                 struct areply reply;
 
                 memset(&reply, '\0', sizeof(reply));
+		reply.attr = gl_list_create_empty(GL_ARRAY_LIST, NULL, NULL, NULL, false);
                 tac_author_read(tac_fd, &reply);
 
                 if (   (AUTHOR_STATUS_PASS_ADD == reply.status)
@@ -1136,7 +1161,7 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
                 }
                 if (NULL != reply.attr)
                 {
-                    tac_free_attrib(&reply.attr);
+                    tac_free_attrib(reply.attr);
                 }
                 free(reply.msg);
             }

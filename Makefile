@@ -1,12 +1,13 @@
 TARGET=		libnss_tacplus.so.2
 TEST_TARGET=	bin/dlharness
-LIBS=		-lnsl -lpthread -ltac
+#LIBS=		-lnsl -lpthread -ltac
+LIBS=		-lpthread -ltac
 TEST_LIBS=	-ldl
 
 CC=	gcc
-CFLAGS=	-D_FORTIFY_SOURCE=2 -O -fstack-protector -std=gnu99 -Werror -Wall \
+CFLAGS+=	-D_FORTIFY_SOURCE=2 -O -fstack-protector -std=gnu99 -Werror -Wall \
 	-ggdb -fPIC -I/usr/local/lib
-LDFLAGS=-shared -Wl,-soname,libnss_tacplus.so.2 -Wl,-rpath=/usr/local/lib
+LDFLAGS+=-shared -Wl,-soname,libnss_tacplus.so.2 -Wl,-rpath=/usr/local/lib
 
 
 OBJECTS=$(patsubst %.c, %.o, $(wildcard src/*.c))
@@ -27,11 +28,11 @@ test: $(TEST_TARGET)
 .PRECIOUS: $(TARGET) $(TEST_TARGET) (OBJECTS)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) $(LIBS) $(LDFLAGS) -o $@
+	$(CC) $(OBJECTS) $(LDFLAGS) $(LIBS) -o $@
 
 $(TEST_TARGET): $(TEST_OBJECTS)
 	-mkdir -p bin
-	$(CC) $(TEST_OBJECTS) $(TEST_LIBS) $(TEST_LDFLAGS) -o $@
+	$(CC) $(TEST_OBJECTS) $(TEST_LDFLAGS) $(TEST_LIBS) -o $@
 
 clean:
 	-rm -f src/*.o test/*.o
